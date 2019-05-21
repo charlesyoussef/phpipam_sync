@@ -22,18 +22,25 @@ which can be easily consumed from the Web interface of Phpipam.
 - If no parameters are specified: the sync will be made from all the sources, and a verification of the resulting IPAM subnet usage is returned.
 - Parameters can be specified to chose the sync sources and/or to just return the subnet usage.
 
-$python phpipam_sync.py -h
+$ python phpipam_sync.py -h
+
 usage: phpipam_sync.py [-h] [-c] [-d] [-s] [-v]
 
 Sync IPAM server from DNA Center, DHCP server and/or static hosts in CSV file.
 If no arguments are passed, the default is to sync from all 3 sources.
 
 optional arguments:
+
   -h, --help    show this help message and exit
+  
   -c, --dnac    sync IPAM from DNA Center
+  
   -d, --dhcp    sync IPAM from MS DHCP Server
+  
   -s, --static  sync IPAM from static CSV file 'hosts.csv'
+  
   -v, --verify  verify the current IPAM subnet usage
+  
 $
 
 ---
