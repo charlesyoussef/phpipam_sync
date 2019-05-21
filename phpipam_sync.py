@@ -20,17 +20,16 @@ import sys
 import csv
 import argparse
 import socket
-import env_lab
+import pypsrp
 from pypsrp.client import Client
 from requests.auth import HTTPBasicAuth
+import env_lab
 
 __author__ = "Charles Youssef"
 __copyright__ = "Copyright 2018 Cisco and/or its affiliates"
 __license__ = "CISCO SAMPLE CODE LICENSE"
 __version__ = "1.1"
 __email__ = "cyoussef@cisco.com"
-
-requests.packages.urllib3.disable_warnings()
 
 # DNAC Variables:
 #################
@@ -73,8 +72,12 @@ def dnac_get_auth_token(controller_ip=DNAC_HOST, username=DNAC_USER, password=DN
     """
 
     login_url = "https://{0}:{1}/api/system/v1/auth/token".format(controller_ip, port)
-    result = requests.post(url=login_url, auth=HTTPBasicAuth(username, password), verify=False)
-    result.raise_for_status()
+    try:
+        result = requests.post(url=login_url, auth=HTTPBasicAuth(username, password), verify=False)
+        result.raise_for_status()
+    except:
+        print_with_timestamp("Unable to authenticate to DNA Center. Please verify settings and reachability.")
+        sys.exit(1)
 
     token = result.json()["Token"]
     return {
@@ -100,8 +103,9 @@ def dnac_get_url(url):
     headers = {'X-auth-token' : token['token']}
     try:
         response = requests.get(url, headers=headers, verify=False)
-    except requests.exceptions.RequestException as cerror:
-        print("Error processing request", cerror)
+        response.raise_for_status()
+    except ConnectionError as error:
+        print_with_timestamp("Error processing DNAC API request. Please verify settings and reachability. %s." % error)
         sys.exit(1)
 
     return response.json()
@@ -114,8 +118,9 @@ def dnac_get_url_v2(url):
     headers = {'X-auth-token' : token['token']}
     try:
         response = requests.get(url, headers=headers, verify=False)
-    except requests.exceptions.RequestException as cerror:
-        print("Error processing request", cerror)
+        response.raise_for_status()
+    except ConnectionError as error:
+        print_with_timestamp("Error processing DNAC API request. Please verify settings and reachability. %s." % error)
         sys.exit(1)
 
     return response.json()
@@ -127,8 +132,12 @@ def ipam_get_auth_token(ipam_ip=PHPIPAM_HOST, port=PHPIPAM_PORT, username=PHPIPA
     """ Authenticates with IPAM and returns a token to be used in subsequent API invocations
     """
     login_url = "http://{0}:{1}/api/{2}/user/".format(ipam_ip, port, app_id)
-    result = requests.post(url=login_url, auth=HTTPBasicAuth(username, password), verify=False)
-    result.raise_for_status()
+    try:
+        result = requests.post(url=login_url, auth=HTTPBasicAuth(username, password), verify=False)
+        result.raise_for_status()
+    except:
+        print_with_timestamp("Unable to authenticate to the IPAM Server. Please verify settings and reachability.")
+        sys.exit(1)
 
     token = result.json()["data"]["token"]
     return {
@@ -149,8 +158,9 @@ def ipam_get_url(url):
     headers = {'token' : token['token']}
     try:
         response = requests.get(url, headers=headers, verify=False)
-    except requests.exceptions.RequestException as cerror:
-        print("Error processing request", cerror)
+        response.raise_for_status()
+    except ConnectionError as error:
+        print_with_timestamp("Error processing IPAM API request. Please verify settings and reachability. %s." % error)
         sys.exit(1)
 
     return response.json()
@@ -163,7 +173,7 @@ def is_valid_ipv4_address(address):
     """
     try:
         socket.inet_pton(socket.AF_INET, address)
-    except AttributeError:  # no inet_pton here, sorry
+    except AttributeError:  # no inet_pton was found
         try:
             socket.inet_aton(address)
         except socket.error:
@@ -180,11 +190,14 @@ def print_with_timestamp(msg):
     print("%s: %s" % (time.asctime(time.localtime(time.time())), msg))
 
 def process_host_in_ipam(ip_add, token, url, payload):
-#def process_host_in_ipam(host, ip_add, token, url, payload):
     """ Inserts the host with IP address ip_add in IPAM DB if it does not already exist, or updates that host note field with the program execution timestamp if it already exists.
     payload is dict holding the entry to be inserted in IPAM. When updating the IPAM host, we need to remove the subnetId and IP-address from payload as otherwise the Patch call to IPAM won't be accepted.
     """
-    ipam_response = requests.request("POST", url, data=json.dumps(payload), headers={'token': token, 'Content-Type': "application/json"})
+    try:
+        ipam_response = requests.request("POST", url, data=json.dumps(payload), headers={'token': token, 'Content-Type': "application/json"})
+    except ConnectionError as error:
+        print_with_timestamp("Error processing IPAM API request. %s" % error)
+        sys.exit(1)
 
     if ipam_response.status_code == 201:
         # The host was not present in IPAM DB so it got added with 201 status_code returned:
@@ -200,7 +213,12 @@ def process_host_in_ipam(ip_add, token, url, payload):
         ip_address_id = ipam_search_address_response["data"][0]["id"]
         # Send the update API call:
         ipam_address_update_url = "http://%s:%s/api/%s/addresses/%s/" % (PHPIPAM_HOST, PHPIPAM_PORT, PHPIPAM_APPID, ip_address_id)
-        ipam_address_update_response = requests.request("PATCH", ipam_address_update_url, data=json.dumps(payload), headers={'token': token, 'Content-Type': "application/json"})
+        try:
+            ipam_address_update_response = requests.request("PATCH", ipam_address_update_url, data=json.dumps(payload), headers={'token': token, 'Content-Type': "application/json"})
+            ipam_address_update_response.raise_for_status()
+        except:
+            print_with_timestamp("Error processing IPAM API request. Please verify settings and reachability.")
+            sys.exit(1)
     else:
         # The IPAM server returned a 5xx status code: Error on server side:
         print_with_timestamp("IPAM DB Server side error. Retry later.")
@@ -232,67 +250,84 @@ def sync_from_dnac(time_tag, ipam_token, ipam_addresses_url):
 def sync_from_static_csv(csv_file, time_tag, ipam_token, ipam_addresses_url):
     """ Reads the host rows from the CSV file and process them in IPAM using the passed ipam token, url and timestamp arguments.
     """
-    print("\nSyncing static hosts from local CSV file...")
-    with open(csv_file, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
+    try:
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            print("\nSyncing static hosts from local CSV file...")
+            for host in reader:
+                # if the entry line starts by a valid IPv4 address, make the payload json body and process it in IPAM.
+                if is_valid_ipv4_address(host[0]):
+                    payload = {
+                        "subnetId": str(PHPIPAM_SUBNET_ID),
+                        "ip": host[0],
+                        "is_gateway": "0",
+                        "description": host[1],
+                        "hostname": host[2],
+                        "mac": host[3],
+                        "note": "static%s%s" %(PHPIPAM_SYNC_TAG_DELIMITER,str(time_tag))
+                    }
+                    # Add the host to the IPAM:
+                    process_host_in_ipam(host[0], ipam_token, ipam_addresses_url, payload)
+                else:
+                    #Else, skip it and print an informational message
+                    print_with_timestamp("Skipping an invalid host entry in CSV file: '%s'" % host[0])
 
-        for host in reader:
-            # if the entry line starts by a valid IPv4 address, make the payload json body and process it in IPAM.
-            if is_valid_ipv4_address(host[0]):
-                payload = {
-                    "subnetId": str(PHPIPAM_SUBNET_ID),
-                    "ip": host[0],
-                    "is_gateway": "0",
-                    "description": host[1],
-                    "hostname": host[2],
-                    "mac": host[3],
-                    "note": "static%s%s" %(PHPIPAM_SYNC_TAG_DELIMITER,str(time_tag))
-                }
-                # Add the host to the IPAM:
-                process_host_in_ipam(host[0], ipam_token, ipam_addresses_url, payload)
-            else:
-                #Else, skip it and print an informational message
-                print_with_timestamp("Skipping an invalid host entry in CSV file: '%s'" % host[0])
+    except EnvironmentError:
+        print_with_timestamp("Unable to open the CSV file. Please verify the file variable in the environment file and retry.")
+        sys.exit(1)
+
 
 def sync_from_dhcp_server(time_tag, ipam_token, ipam_addresses_url):
     """Connect to DHCP server via PowerShell Remoting, import its dhcp scopes leases, then process them in IPAM using the passed ipam token, url and timestamp arguments.
     """
-    print("\nSyncing the leased hosts from the DHCP Server...")
+
     client = Client(DHCP_SERVER_FQDN, username=DHCP_SERVER_USERNAME,
-                    password=DHCP_SERVER_PASSWORD, ssl=DHCP_SERVER_SSL)
+                        password=DHCP_SERVER_PASSWORD, ssl=DHCP_SERVER_SSL)
 
     for scope in DHCP_SERVER_SCOPES:
-        command = r"Get-DhcpServerv4Lease -Scopeid %s" %scope
-        dhcp_server_output, streams, had_errors = client.execute_ps(command)
-        formatted_dhcp_server_output = dhcp_server_output.split("\n")
+        # scope is a subnet IP address. IP address check:
+        if is_valid_ipv4_address(scope):
+            command = r"Get-DhcpServerv4Lease -Scopeid %s" % scope
+            try:
+                dhcp_server_output, streams, had_errors = client.execute_ps(command)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, pypsrp.exceptions.AuthenticationError, requests.exceptions.HTTPError) as error:
+                print_with_timestamp("Unable to connect to the DHCP Server. Please verify settings and reachability.")
+                sys.exit(1)
+            formatted_dhcp_server_output = dhcp_server_output.split("\n")
+            print("\nSyncing the leased hosts from the DHCP Server, scope %s ..." % scope)
+            # Iterate through the list of hosts leases for this scope, starting from index 3 to skip the empty line, then column names line, then the delimiter line:
+            for lease in range(3,len(formatted_dhcp_server_output)-2):
+                lease_list = formatted_dhcp_server_output[lease].split()
+                payload = ""
+                # when length of lease_list is 8, this means all the fields are populated including the hostname
+                if (len(lease_list) == 8) & (lease_list[4] == "Active"):
+                    payload = {
+                        "subnetId": str(PHPIPAM_SUBNET_ID),
+                        "ip": lease_list[0],
+                        "is_gateway": "0",
+                        "description": lease_list[3],
+                        "hostname": lease_list[3],
+                        "mac": lease_list[2],
+                        "note": "dhcp%s%s" %(PHPIPAM_SYNC_TAG_DELIMITER,str(time_tag))
+                    }
+                # when length of lease_list is 7, this means the hostname field is empty.
+                # MAC address field is shifted to the left after the string split.
+                elif (len(lease_list) == 7) & (lease_list[3] == "Active"):
+                    payload = {
+                        "subnetId": str(PHPIPAM_SUBNET_ID),
+                        "ip": lease_list[0],
+                        "is_gateway": "0",
+                        "description": "N/A",
+                        "hostname": "N/A",
+                        "mac": lease_list[2],
+                        "note": "dhcp%s%s" %(PHPIPAM_SYNC_TAG_DELIMITER,str(time_tag))
+                    }
+                # Add the host to the IPAM if it's an active lease:
+                if payload != "":
+                    process_host_in_ipam(lease_list[0], ipam_token, ipam_addresses_url, payload)
 
-        # Iterate through the list of hosts leases for this scope, starting from index 3 to skip the top column name and delimiter rows:
-        for lease in range(3,len(formatted_dhcp_server_output)-2):
-            lease_list = formatted_dhcp_server_output[lease].split()
-            payload = ""
-            if (len(lease_list) == 8) & (lease_list[4] == "Active"):
-                payload = {
-                    "subnetId": str(PHPIPAM_SUBNET_ID),
-                    "ip": lease_list[0],
-                    "is_gateway": "0",
-                    "description": lease_list[3],
-                    "hostname": lease_list[3],
-                    "mac": lease_list[2],
-                    "note": "dhcp%s%s" %(PHPIPAM_SYNC_TAG_DELIMITER,str(time_tag))
-                }
-            elif (len(lease_list) == 7) & (lease_list[3] == "Active"):
-                payload = {
-                    "subnetId": str(PHPIPAM_SUBNET_ID),
-                    "ip": lease_list[0],
-                    "is_gateway": "0",
-                    "description": "N/A",
-                    "hostname": "N/A",
-                    "mac": lease_list[2],
-                    "note": "dhcp%s%s" %(PHPIPAM_SYNC_TAG_DELIMITER,str(time_tag))
-                }
-            # Add the host to the IPAM if it's an active lease:
-            if payload != "":
-                process_host_in_ipam(lease_list[0], ipam_token, ipam_addresses_url, payload)
+        else: # value entered in scopes list variable is invalid, skipping it:
+            print_with_timestamp("\nSkipping an invalid scope entry in the scopes list variable: '%s'" % scope)
 
 def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url):
     """Deletes the hosts that have not been added/refreshed in the last script run source.
@@ -306,18 +341,19 @@ def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url):
         for host in subnet_addresses_response["data"]:
             # If source is "all" or the first part of the note tag matches the source, proceed with comparing the time_tag to the note tag.
             if (source == "all") or (host["note"].split(PHPIPAM_SYNC_TAG_DELIMITER)[0] == source):
+                # If the tag does not match time_tag or , the host was not updated in this run
+                # so need to delete it. Else, do nothing.
                 if ((len(host["note"].split(PHPIPAM_SYNC_TAG_DELIMITER)) != 1) and (host["note"].split(PHPIPAM_SYNC_TAG_DELIMITER)[1] != str(time_tag))):
-                    # If the tag does not match time_tag or , the host was not updated in this run
-                    # so need to delete it. Else, do nothing.
                     ipam_address_delete_url = "http://%s:%s/api/%s/addresses/%s/" % (PHPIPAM_HOST, PHPIPAM_PORT, PHPIPAM_APPID, host["id"])
-                    ipam_address_delete_response = requests.request("DELETE", ipam_address_delete_url, headers={'token': ipam_token, 'Content-Type': "application/json"})
-                    if ipam_address_delete_response.status_code == 200:
+                    try:
+                        ipam_address_delete_response = requests.request("DELETE", ipam_address_delete_url, headers={'token': ipam_token, 'Content-Type': "application/json"})
                         print_with_timestamp("Host %s was deleted from IPAM DB" % host["ip"])
-                    else:
+                    except:
                         print_with_timestamp("Could not delete Host %s. Returned message from server: %s" %(host["ip"], ipam_address_delete_response.json()["message"]))
+                        sys.exit(1)
     else:
         # Could not get the addresses from the IPAM subnet
-        print_with_timestamp("Unable to get the subnet addresses from the IPAM. Retry later.")
+        print_with_timestamp("Unable to get the subnet addresses from the IPAM. Please Retry later.")
         sys.exit(1)
 
 def verify_ipam_subnet_usage():
@@ -349,15 +385,15 @@ def main():
     parser.add_argument("-v", "--verify", action="store_true", help="verify the current IPAM subnet usage")
     args = parser.parse_args()
 
-    # Get the current time, to be used to tag addresses inserted in IPAM:
+    requests.packages.urllib3.disable_warnings()
+
+    # Get the current time, to be used to tag addresses inserted/refreshed in this run:
     time_tag = int(time.time())
 
     # Authenticate/refresh the token to IPAM:
-    try:
-        ipam_token = ipam_get_auth_token()["token"]
-    except ConnectionError:
-        print("Unable to connect to IPAM server. Please verify the server reachability.")
-        sys.exit(1)
+    ipam_token = ipam_get_auth_token()["token"]
+
+    # Get the IPAM addresses (hosts) API URI:
     ipam_addresses_url = ipam_create_url("addresses")
 
     if args.dnac:
