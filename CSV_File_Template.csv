@@ -1,0 +1,5 @@
+# Enter your static host list here, in this order:
+# IP_address, Description, Hostname, MAC_address
+#For example:
+10.255.1.1,Static Host 1,StaticHost1,00:00:11:11:25:51
+10.255.1.2,Static Host 2,StaticHost2,00:00:11:11:25:52

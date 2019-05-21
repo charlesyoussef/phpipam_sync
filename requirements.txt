@@ -1,0 +1,2 @@
+pypsrp==0.3.1
+requests==2.21.0
