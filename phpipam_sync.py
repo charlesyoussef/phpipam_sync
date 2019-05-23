@@ -21,6 +21,7 @@ import csv
 import argparse
 import socket
 import pypsrp
+import paramiko
 from pypsrp.client import Client
 from requests.auth import HTTPBasicAuth
 import env_lab
@@ -58,6 +59,11 @@ DHCP_SERVER_USERNAME = env_lab.MS_DHCP_SERVER['username']
 DHCP_SERVER_PASSWORD = env_lab.MS_DHCP_SERVER['password']
 DHCP_SERVER_SSL = env_lab.MS_DHCP_SERVER['ssl']
 DHCP_SERVER_SCOPES = env_lab.MS_DHCP_SERVER['scopes']
+
+IOS_DHCP_SWITCH = env_lab.IOS_DHCP_SERVER['switch']
+IOS_DHCP_PORT = env_lab.IOS_DHCP_SERVER['ssh_port']
+IOS_DHCP_USERNAME = env_lab.IOS_DHCP_SERVER['username']
+IOS_DHCP_PASSWORD = env_lab.IOS_DHCP_SERVER['password']
 
 # Static hosts CSV file Variable:
 #################################
@@ -184,6 +190,14 @@ def is_valid_ipv4_address(address):
 
     return True
 
+def convert_mac_address_format(cisco_mac):
+    """Converts a MAC address from the cisco format xxxx.xxxx.xxxx to the standard format
+    accepted by IPAM xx:xx:xx:xx:xx:xx
+    """
+    a = cisco_mac.replace('.','')
+    result = ':'.join([a[0:2], a[2:4], a[4:6], a[6:8], a[8:10], a[10:12]])
+    return result
+
 def print_with_timestamp(msg):
     """Helper to print the msg string prepended with the current timestamp.
     """
@@ -219,10 +233,14 @@ def process_host_in_ipam(ip_add, token, url, payload):
         except:
             print_with_timestamp("Error processing IPAM API request. Please verify settings and reachability.")
             sys.exit(1)
+    elif json.loads(ipam_response.text)['message'].startswith('IP address not in selected subnet'):
+        # The IP address we're trying to add does not belong to the parent IPAM subnets
+        print_with_timestamp("%s. Skipping it" % json.loads(ipam_response.text)['message'])
     else:
         # The IPAM server returned a 5xx status code: Error on server side:
         print_with_timestamp("IPAM DB Server side error. Retry later.")
         sys.exit(1)
+
 
 def sync_from_dnac(time_tag, ipam_token, ipam_addresses_url):
     """Connect to DNA Center, import its hosts, then process them in IPAM using the passed ipam token, url and timestamp arguments.
@@ -277,7 +295,7 @@ def sync_from_static_csv(csv_file, time_tag, ipam_token, ipam_addresses_url):
         sys.exit(1)
 
 
-def sync_from_dhcp_server(time_tag, ipam_token, ipam_addresses_url):
+def sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url):
     """Connect to DHCP server via PowerShell Remoting, import its dhcp scopes leases, then process them in IPAM using the passed ipam token, url and timestamp arguments.
     """
 
@@ -294,7 +312,7 @@ def sync_from_dhcp_server(time_tag, ipam_token, ipam_addresses_url):
                 print_with_timestamp("Unable to connect to the DHCP Server. Please verify settings and reachability.")
                 sys.exit(1)
             formatted_dhcp_server_output = dhcp_server_output.split("\n")
-            print("\nSyncing the leased hosts from the DHCP Server, scope %s ..." % scope)
+            print("\nSyncing the leased hosts from the MS DHCP Server, scope %s ..." % scope)
             # Iterate through the list of hosts leases for this scope, starting from index 3 to skip the empty line, then column names line, then the delimiter line:
             for lease in range(3,len(formatted_dhcp_server_output)-2):
                 lease_list = formatted_dhcp_server_output[lease].split()
@@ -328,6 +346,43 @@ def sync_from_dhcp_server(time_tag, ipam_token, ipam_addresses_url):
 
         else: # value entered in scopes list variable is invalid, skipping it:
             print_with_timestamp("\nSkipping an invalid scope entry in the scopes list variable: '%s'" % scope)
+
+
+def sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url):
+    """Connect to IOS DHCP server via SSH, and import its dhcp binding database into IPAM
+    """
+
+    #Open the SSH session:
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        ssh_client.connect(IOS_DHCP_SWITCH, port=IOS_DHCP_PORT, username=IOS_DHCP_USERNAME, password=IOS_DHCP_PASSWORD, look_for_keys=False, allow_agent=False)
+    except (socket.error, paramiko.ssh_exception.AuthenticationException, paramiko.ssh_exception.NoValidConnectionsError, paramiko.ssh_exception.SSHException):
+        print_with_timestamp("Unable to connect to IOS DHCP Server %s. Please verify settings and reachability." % IOS_DHCP_SWITCH)
+        sys.exit(1)
+
+    print("\nSyncing the leased hosts from the IOS DHCP Server %s ..." % IOS_DHCP_SWITCH)
+    stdin, stdout, stderr = ssh_client.exec_command("show ip dhcp binding")
+    # If no errors, parse the CLI output, else return an error:
+    if str(stderr.read()) == "b''":
+        cli_output = str(stdout.read()).split("\\n")
+        for line in cli_output:
+            # If the line starts with an IP address, create a payload based on it.
+            # Else, skip this line and do nothing.
+            if is_valid_ipv4_address(line.split(" ")[0]):
+                payload = {
+                    "subnetId": str(PHPIPAM_SUBNET_ID),
+                    "ip": line.split()[0],
+                    "is_gateway": "0",
+                    "description": "Added via IOS DHCP Server",
+                    "hostname": "N/A",
+                    "mac": convert_mac_address_format(line.split()[1]),
+                    "note": "dhcp%s%s" %(PHPIPAM_SYNC_TAG_DELIMITER,str(time_tag))
+                }
+                process_host_in_ipam(line.split()[0], ipam_token, ipam_addresses_url, payload)
+    else:
+        print_with_timestamp("Unable to get the DHCP output from IOS Switch %s. Please retry later." % IOS_DHCP_SWITCH)
+
 
 def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url):
     """Deletes the hosts that have not been added/refreshed in the last script run source.
@@ -404,9 +459,12 @@ def main():
 
     if args.dhcp:
         # Sync from the DHCP server scopes leases to the IPAM DB:
-        sync_from_dhcp_server(time_tag, ipam_token, ipam_addresses_url)
+        sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url)
+        # Sync from the IOS DHCP server:
+        sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url)
         # Delete the stale dhcp hosts from IPAM DB:
         delete_stale_hosts("dhcp", time_tag, ipam_token, ipam_addresses_url)
+
 
     if args.static:
         # Sync the static hosts from the CSV file STATICS_CSV_FILE to the IPAM DB:
@@ -421,7 +479,7 @@ def main():
     if len(sys.argv) == 1:
         # No args are passed. Then sync from all the 3 sources and verify the IPAM subnet usage:
         sync_from_dnac(time_tag, ipam_token, ipam_addresses_url)
-        sync_from_dhcp_server(time_tag, ipam_token, ipam_addresses_url)
+        sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url)
         sync_from_static_csv(STATICS_CSV_FILE, time_tag, ipam_token, ipam_addresses_url)
         delete_stale_hosts("all", time_tag, ipam_token, ipam_addresses_url)
         verify_ipam_subnet_usage()
