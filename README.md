@@ -16,9 +16,13 @@ The synchronization consists of both:
 - Deleting stale addresses (hosts) that used to exist but are not anymore advertised
 by the same source(s) in the last program execution.
 
+Whenever an address (host) is added or deleted from the PHPIPAM Database, notifications are made via:
+- a log entry added to a log text file in local directory
+- a message is posted in a Webex Teams space
+- at the end of the program Execution, a single email is sent with the list of added & deleted hosts
+
 The Role-based Access Control (RBAC) on the subnet management is natively built
 inside PHPIPAM which can be consumed from the server Web interface.
-Phpipam IPAM server sync from DNA-Center, Microsoft-Server & IOS DHCP Servers, and static hosts in a CSV file:
 
 ---
 
@@ -37,12 +41,19 @@ Sync IPAM server from DNA Center, DHCP server and/or static hosts in CSV file.
 If no arguments are passed, the default is to sync from all 3 sources.
 
 optional arguments:
+
   -h, --help     show this help message and exit
+
   -c, --dnac     sync IPAM from DNA Center
+
   -d, --dhcp     sync IPAM from MS DHCP Server
+
   -s, --static   sync IPAM from static CSV file
+
   -v, --verify   verify the current IPAM subnet usage
+
   -l IP-Address  search for an IP address inside IPAM
+
 (phpipam-venv) cyoussef:$
 
 ---

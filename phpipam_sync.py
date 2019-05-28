@@ -16,6 +16,11 @@ The synchronization consists of both:
 - Deleting stale addresses (hosts) that used to exist but are not anymore advertised
 by the same source(s) in the last program execution.
 
+Whenever an address (host) is added or deleted from the PHPIPAM Database, notifications are made via:
+- a log entry added to a log text file in local directory
+- a message is posted in a Webex Teams space
+- at the end of the program Execution, a single email is sent with the list of added & deleted hosts
+
 The Role-based Access Control (RBAC) on the subnet management is natively built
 inside PHPIPAM which can be consumed from the server Web interface.
 """
@@ -30,9 +35,11 @@ import socket
 import pypsrp
 import paramiko
 import smtplib
+import os
 from email.mime.text import MIMEText
 from pypsrp.client import Client
 from requests.auth import HTTPBasicAuth
+from webexteamssdk import WebexTeamsAPI
 from datetime import datetime
 
 # If the env_file.py is missing from local directory
@@ -83,6 +90,9 @@ try:
     EMAIL_TO_ADDRESS_LIST = env_file.EMAIL_PROPERTIES['to_address_list']
     EMAIL_SUBJECT = env_file.EMAIL_PROPERTIES['email_subject']
     EMAIL_CONTENT_FILE = env_file.EMAIL_PROPERTIES['email_content_tempfile']
+    # Webex Teams Variables:
+    TEAMS_ROOM_ID = env_file.WEBEX_TEAMS['room_id']
+    TEAMS_BOT_TOKEN = env_file.WEBEX_TEAMS['bot_token']
 
 except (NameError, KeyError):
     print("Invalid input in env_file. Please complete the required fields in the proper format.")
@@ -106,7 +116,7 @@ LOG_FILE = None
 # DNAC Helper Functions:
 
 def dnac_get_auth_token(controller_ip=DNAC_HOST, username=DNAC_USER, password=DNAC_PASSWORD,
-    port=DNAC_PORT, log_file=LOG_FILE):
+    port=DNAC_PORT, log_file=LOG_FILE, email_content_file=EMAIL_CONTENT_FILE):
     """ Authenticates with DNA Center and returns a token to be used in subsequent API calls
     """
 
@@ -115,11 +125,9 @@ def dnac_get_auth_token(controller_ip=DNAC_HOST, username=DNAC_USER, password=DN
         result = requests.post(url=login_url, auth=HTTPBasicAuth(username, password), verify=False)
         result.raise_for_status()
     except:
-        print_with_timestamp_and_log("Unable to authenticate to DNA Center. Please verify settings \
-            and reachability.", log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print("Unable to authenticate to DNA Center. Please verify " \
+            "settings and reachability.")
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
     token = result.json()["Token"]
@@ -138,7 +146,7 @@ def dnac_create_url_v2(path, controller_ip=DNAC_HOST, port=DNAC_PORT):
     """
     return "https://%s:%s/api/v2/%s" % (controller_ip, port, path)
 
-def dnac_get_url(url, log_file):
+def dnac_get_url(url, log_file, EMAIL_CONTENT_FILE):
     """ Helper function to get data from a DNAC endpoint v1 URI
     """
     url = dnac_create_url(path=url)
@@ -148,16 +156,14 @@ def dnac_get_url(url, log_file):
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
     except ConnectionError as error:
-        print_with_timestamp_and_log("Error processing DNAC API request. Please verify settings \
-            and reachability. %s." % error, log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print("Error processing DNAC API request. Please verify settings " \
+            "and reachability. %s." % error)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
     return response.json()
 
-def dnac_get_url_v2(url, log_file):
+def dnac_get_url_v2(url, log_file, EMAIL_CONTENT_FILE):
     """ Helper function to get data from a DNAC endpoint v2 URI
     """
     url = dnac_create_url_v2(path=url)
@@ -167,11 +173,9 @@ def dnac_get_url_v2(url, log_file):
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
     except ConnectionError as error:
-        print_with_timestamp_and_log("Error processing DNAC API request. Please verify settings \
-            and reachability. %s." % error, log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print("Error processing DNAC API request. Please verify settings " \
+            "and reachability. %s." % error)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
     return response.json()
@@ -179,7 +183,8 @@ def dnac_get_url_v2(url, log_file):
 # IPAM Helper Functions:
 
 def ipam_get_auth_token(ipam_ip=PHPIPAM_HOST, port=PHPIPAM_PORT, username=PHPIPAM_USER,
-    password=PHPIPAM_PASSWORD, app_id=PHPIPAM_APPID, log_file=LOG_FILE):
+    password=PHPIPAM_PASSWORD, app_id=PHPIPAM_APPID, log_file=LOG_FILE,
+    email_content_file=EMAIL_CONTENT_FILE):
     """ Authenticates with IPAM and returns a token to be used in subsequent API calls
     """
     login_url = "http://{0}:{1}/api/{2}/user/".format(ipam_ip, port, app_id)
@@ -187,11 +192,9 @@ def ipam_get_auth_token(ipam_ip=PHPIPAM_HOST, port=PHPIPAM_PORT, username=PHPIPA
         result = requests.post(url=login_url, auth=HTTPBasicAuth(username, password), verify=False)
         result.raise_for_status()
     except:
-        print_with_timestamp_and_log("Unable to authenticate to the IPAM Server. Please verify \
-            settings and reachability.", log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print("Unable to authenticate to the IPAM Server. Please verify " \
+            "settings and reachability.")
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
     token = result.json()["data"]["token"]
@@ -205,7 +208,7 @@ def ipam_create_url(path, ipam_ip=PHPIPAM_HOST, port=PHPIPAM_PORT, app_id=PHPIPA
     """
     return "http://%s:%s/api/%s/%s" % (ipam_ip, port, app_id, path)
 
-def ipam_get_url(url, log_file):
+def ipam_get_url(url, log_file, EMAIL_CONTENT_FILE):
     """ Helper function to get data from a PHPIPAM endpoint URL
     """
     url = ipam_create_url(path=url)
@@ -215,11 +218,9 @@ def ipam_get_url(url, log_file):
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
     except ConnectionError as error:
-        print_with_timestamp_and_log("Error processing IPAM API request. Please verify settings \
-            and reachability. %s." % error, log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print("Error processing IPAM API request. Please verify settings " \
+            "and reachability. %s." % error)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
     return response.json()
@@ -257,7 +258,8 @@ def print_with_timestamp_and_log(msg, log_file):
     log_file.write("%s\n" %result)
     print(result)
 
-def process_host_in_ipam(ip_add, token, url, payload, log_file, email_body):
+def process_host_in_ipam(ip_add, token, url, payload, log_file, email_body, EMAIL_CONTENT_FILE,
+    webex_teams_api):
     """ Inserts the host with IP address ip_add in IPAM DB if it does not already exist,
     or updates that host note field with the new program execution timestamp if it already exists.
     Payload is a dict holding the entry to be inserted in IPAM.
@@ -269,18 +271,14 @@ def process_host_in_ipam(ip_add, token, url, payload, log_file, email_body):
         ipam_response = requests.request("POST", url, data=json.dumps(payload),
             headers={'token': token, 'Content-Type': "application/json"})
     except ConnectionError as error:
-        print_with_timestamp_and_log("Error processing IPAM API request. %s" % error, log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print("Error processing IPAM API request. %s" % error)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
     if ipam_response.status_code == 201:
         # The host was not present in IPAM DB so it got added with 201 status_code returned:
-        print_with_timestamp_and_log("Added host %s to IPAM DB" % ip_add, log_file)
-        email_body.write("\n%s: Added host %s to IPAM DB\n" % (
-            time.asctime(time.localtime(time.time())), ip_add))
-        email_flag = True
+        msg = "Added host %s to IPAM DB" % ip_add
+        email_flag = notify_via_log_email_teams(msg, log_file, email_body, webex_teams_api)
     elif ipam_response.status_code == 409:
         # The host already exists in IPAM DB; "note" tag to be updated to the current time_tag:
         print_with_timestamp_and_log("Host %s already exists in IPAM DB" % ip_add, log_file)
@@ -288,7 +286,8 @@ def process_host_in_ipam(ip_add, token, url, payload, log_file, email_body):
         payload.pop("subnetId")
         ip_address = payload.pop("ip")
         # Get the "id" of this host IP address, to be able to update its timestamp note tag:
-        ipam_search_address_response = ipam_get_url("addresses/search/%s/" %(ip_address), log_file)
+        ipam_search_address_response = ipam_get_url("addresses/search/%s/" %(ip_address), log_file,
+        EMAIL_CONTENT_FILE)
         ip_address_id = ipam_search_address_response["data"][0]["id"]
         ip_address_note = ipam_search_address_response["data"][0]["note"]
         ip_address_owner = ipam_search_address_response["data"][0]["owner"]
@@ -310,31 +309,26 @@ def process_host_in_ipam(ip_add, token, url, payload, log_file, email_body):
             ipam_address_update_response.raise_for_status()
         except:
             print_with_timestamp_and_log("Error processing IPAM API request. \
-                Please verify settings and reachability.", log_file)
-            log_file.close()
-            email_body.close()
-            send_email()
+            Please verify settings and reachability.", log_file)
+            cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
             sys.exit(1)
 
     elif json.loads(ipam_response.text)['message'].startswith('IP address not in selected subnet'):
         # The IP address we're trying to add does not belong to the parent IPAM subnets
-        print_with_timestamp_and_log("%s. Skipping it" % json.loads(
-            ipam_response.text)['message'], log_file)
+        print_with_timestamp_and_log("%s. Skipping it" % json.loads(ipam_response.text)['message'], log_file)
     else:
         # The IPAM server returned a 5xx status code: Error on server side:
         print_with_timestamp_and_log("IPAM DB Server side error. Retry later.", log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
 
-def sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file):
+def sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file, webex_teams_api):
     """Connect to DNA Center, import its hosts, then process them in IPAM using
     the passed ipam token, url and timestamp arguments.
     """
     # Get the list of hosts from DNAC:
-    hosts_response = dnac_get_url("host", log_file)
+    hosts_response = dnac_get_url("host", log_file, EMAIL_CONTENT_FILE)
     hosts_list = hosts_response["response"]
 
     # Add the DNAC hosts to the IPAM subnet defined globally:
@@ -355,9 +349,10 @@ def sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file):
 
         # Process the host in IPAM:
         process_host_in_ipam(host["hostIp"], ipam_token, ipam_addresses_url, payload,
-            log_file, email_body)
+            log_file, email_body, EMAIL_CONTENT_FILE, webex_teams_api)
 
-def sync_from_static_csv(csv_file, time_tag, ipam_token, ipam_addresses_url, log_file, email_body):
+def sync_from_static_csv(csv_file, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+    EMAIL_CONTENT_FILE, webex_teams_api):
     """ Reads the host rows from the CSV file and process them in IPAM
     using the passed ipam token, url and timestamp arguments.
     """
@@ -374,30 +369,29 @@ def sync_from_static_csv(csv_file, time_tag, ipam_token, ipam_addresses_url, log
                         "subnetId": str(PHPIPAM_SUBNET_ID),
                         "ip": host[0],
                         "is_gateway": "0",
-                        "description": host[1],
-                        "hostname": host[2],
-                        "mac": host[3],
+                        "description": "N/A" if host[1] == '' else host[1],
+                        "hostname": "N/A" if host[2] == '' else host[2],
+                        #"mac": "00:00:00:00:00:00" if not host[3] else host[3],
                         "owner": TAG_STATIC,
                         "note": str(time_tag)
                     }
                     # Add the host to the IPAM:
                     process_host_in_ipam(host[0], ipam_token, ipam_addresses_url, payload,
-                        log_file, email_body)
+                        log_file, email_body, EMAIL_CONTENT_FILE, webex_teams_api)
                 else:
                     #Else, skip it and print an informational message
-                    print_with_timestamp_and_log("Skipping an invalid host entry in CSV file: \
-                        '%s'" % host[0], log_file)
+                    print_with_timestamp_and_log("Skipping an invalid host entry in CSV file: '%s'"
+                    % host[0], log_file)
 
     except EnvironmentError:
         print_with_timestamp_and_log("Unable to open the CSV file. Please verify the file \
-            variable in the environment file and retry.", log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        variable in the environment file and retry.", log_file)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
 
-def sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file):
+def sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file, EMAIL_CONTENT_FILE,
+    webex_teams_api):
     """Connect to DHCP server via PowerShell Remoting, import its dhcp scopes leases,
     then process them in IPAM using the passed ipam token, url and timestamp arguments.
     """
@@ -405,65 +399,67 @@ def sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file)
     client = Client(DHCP_SERVER_FQDN, username=DHCP_SERVER_USERNAME,
                         password=DHCP_SERVER_PASSWORD, ssl=DHCP_SERVER_SSL)
 
+    # validate that all entered DHCP scopes in the list env variable are valid IP subnet addresses.
+    # If any invalid entry is found, exit the program.
     for scope in DHCP_SERVER_SCOPES:
-        # scope is a subnet IP address. IP address check:
-        if is_valid_ipv4_address(scope):
-            command = r"Get-DhcpServerv4Lease -Scopeid %s" % scope
-            try:
-                dhcp_server_output, streams, had_errors = client.execute_ps(command)
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
-                pypsrp.exceptions.AuthenticationError, requests.exceptions.HTTPError) as error:
-                print_with_timestamp_and_log("Unable to connect to the DHCP Server. Please verify \
-                    settings and reachability.", log_file)
-                log_file.close()
-                email_body.close()
-                send_email()
-                sys.exit(1)
-            formatted_dhcp_server_output = dhcp_server_output.split("\n")
-            print("\nSyncing the leased hosts from the MS DHCP Server, scope %s..." % scope)
-            log_file.write("\nSyncing the leased hosts from the MS DHCP Server, scope %s...\n" % scope)
-            # Iterate through the list of hosts leases for this scope, starting from index 3
-            # to skip the empty line, then column names line, then the delimiter line:
-            for lease in range(3,len(formatted_dhcp_server_output)-2):
-                lease_list = formatted_dhcp_server_output[lease].split()
-                payload = ""
-                # when length of lease_list is 8, this means all the fields are populated
-                # including the hostname
-                if (len(lease_list) == 8) & (lease_list[4] == "Active"):
-                    payload = {
-                        "subnetId": str(PHPIPAM_SUBNET_ID),
-                        "ip": lease_list[0],
-                        "is_gateway": "0",
-                        "description": lease_list[3],
-                        "hostname": lease_list[3],
-                        "mac": lease_list[2],
-                        "owner": TAG_MSDHCP,
-                        "note": str(time_tag)
-                    }
-                # when length of lease_list is 7, this means the hostname field is empty.
-                # MAC address field is shifted to the left after the string split.
-                elif (len(lease_list) == 7) & (lease_list[3] == "Active"):
-                    payload = {
-                        "subnetId": str(PHPIPAM_SUBNET_ID),
-                        "ip": lease_list[0],
-                        "is_gateway": "0",
-                        "description": "N/A",
-                        "hostname": "N/A",
-                        "mac": lease_list[2],
-                        "owner": TAG_MSDHCP,
-                        "note": str(time_tag)
-                    }
-                # Add the host to the IPAM if it's an active lease:
-                if payload != "":
-                    process_host_in_ipam(lease_list[0], ipam_token, ipam_addresses_url, payload,
-                        log_file, email_body)
+        if not is_valid_ipv4_address(scope):
+            print("At least one invalid scope is found in MS DHCP Server scopes list. " \
+                "Please use valid IP subnet DHCP scope entries and retry.")
+            sys.exit(1)
 
-        else: # value entered in scopes list variable is invalid, skipping it:
-            print_with_timestamp_and_log("\nSkipping an invalid scope entry in the scopes \
-                list variable: '%s'" % scope, log_file)
+    # All scopes are valid, proceed with the sync from the DHCP server:
+    for scope in DHCP_SERVER_SCOPES:
+        command = r"Get-DhcpServerv4Lease -Scopeid %s" % scope
+        try:
+            dhcp_server_output, streams, had_errors = client.execute_ps(command)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+            pypsrp.exceptions.AuthenticationError, requests.exceptions.HTTPError) as error:
+            print_with_timestamp_and_log("Unable to connect to the DHCP Server. Please verify " \
+                "settings and reachability.", log_file)
+            cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
+            sys.exit(1)
+        formatted_dhcp_server_output = dhcp_server_output.split("\n")
+        print("\nSyncing the leased hosts from the MS DHCP Server, scope %s..." % scope)
+        log_file.write("\nSyncing the leased hosts from the MS DHCP Server, scope %s...\n" % scope)
+        # Iterate through the list of hosts leases for this scope, starting from index 3
+        # to skip the empty line, then column names line, then the delimiter line:
+        for lease in range(3,len(formatted_dhcp_server_output)-2):
+            lease_list = formatted_dhcp_server_output[lease].split()
+            payload = ""
+            # when length of lease_list is 8, this means all the fields are populated
+            # including the hostname
+            if (len(lease_list) == 8) & (lease_list[4] == "Active"):
+                payload = {
+                    "subnetId": str(PHPIPAM_SUBNET_ID),
+                    "ip": lease_list[0],
+                    "is_gateway": "0",
+                    "description": lease_list[3],
+                    "hostname": lease_list[3],
+                    "mac": lease_list[2],
+                    "owner": TAG_MSDHCP,
+                    "note": str(time_tag)
+                }
+            # when length of lease_list is 7, this means the hostname field is empty.
+            # MAC address field is shifted to the left after the string split.
+            elif (len(lease_list) == 7) & (lease_list[3] == "Active"):
+                payload = {
+                    "subnetId": str(PHPIPAM_SUBNET_ID),
+                    "ip": lease_list[0],
+                    "is_gateway": "0",
+                    "description": "N/A",
+                    "hostname": "N/A",
+                    "mac": lease_list[2],
+                    "owner": TAG_MSDHCP,
+                    "note": str(time_tag)
+                }
+            # Add the host to the IPAM if it's an active lease:
+            if payload != "":
+                process_host_in_ipam(lease_list[0], ipam_token, ipam_addresses_url, payload,
+                    log_file, email_body, EMAIL_CONTENT_FILE, webex_teams_api)
 
 
-def sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file):
+def sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file, EMAIL_CONTENT_FILE,
+    webex_teams_api):
     """Connect to IOS DHCP server via VTY, and import its dhcp binding database into IPAM
     """
 
@@ -476,10 +472,8 @@ def sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file
     except (socket.error, paramiko.ssh_exception.AuthenticationException,
         paramiko.ssh_exception.NoValidConnectionsError, paramiko.ssh_exception.SSHException):
         print_with_timestamp_and_log("Unable to connect to IOS DHCP Server %s. Please verify \
-            settings and reachability." % IOS_DHCP_SWITCH, log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        settings and reachability." % IOS_DHCP_SWITCH, log_file)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
     print("\nSyncing the leased hosts from the IOS DHCP Server %s..." % IOS_DHCP_SWITCH)
@@ -503,13 +497,14 @@ def sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file
                     "note": str(time_tag)
                 }
                 process_host_in_ipam(line.split()[0], ipam_token, ipam_addresses_url,
-                    payload, log_file, email_body)
+                    payload, log_file, email_body, EMAIL_CONTENT_FILE, webex_teams_api)
     else:
-        print_with_timestamp_and_log("Unable to get the DHCP output from IOS Switch %s. \
-            Please retry later." % IOS_DHCP_SWITCH, log_file)
+        print_with_timestamp_and_log("Unable to get the DHCP output from IOS Switch %s. " \
+            "Please retry later." % IOS_DHCP_SWITCH, log_file)
 
 
-def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url, log_file, email_body):
+def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+EMAIL_CONTENT_FILE, webex_teams_api):
     """Deletes the hosts that have not been added/refreshed in the last script run source.
     Source can be either one of the source tag variables defined globally.
     This relies on the timestamp in the note field of the host in IPAM DB,
@@ -518,7 +513,8 @@ def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url, log_fil
     global email_flag
     print("\nDeleting any stale hosts from IPAM server...")
     log_file.write("\nDeleting any stale hosts from IPAM server...\n")
-    subnet_addresses_response = ipam_get_url("subnets/%s/addresses/" %(PHPIPAM_SUBNET_ID), log_file)
+    subnet_addresses_response = ipam_get_url("subnets/%s/addresses/" %(PHPIPAM_SUBNET_ID), log_file,
+    EMAIL_CONTENT_FILE)
     if subnet_addresses_response["success"]:
         for host in subnet_addresses_response["data"]:
             host_sources_set = set(host["owner"].split(','))
@@ -530,21 +526,16 @@ def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url, log_fil
                     try:
                         ipam_address_delete_response = requests.request("DELETE", ipam_address_delete_url,
                             headers={'token': ipam_token, 'Content-Type': "application/json"})
-                        print_with_timestamp_and_log("Host %s was deleted from IPAM \
-                            DB" % host["ip"], log_file)
-                        email_body.write("\n%s: Host %s was deleted from IPAM DB\n" % (
-                            time.asctime(time.localtime(time.time())), host["ip"]))
-                        email_flag = True
+                        msg = "Host %s was deleted from IPAM DB" % host["ip"]
+                        email_flag = notify_via_log_email_teams(msg, log_file, email_body, webex_teams_api)
                     except:
-                        print_with_timestamp_and_log("Could not delete Host %s. Returned message from \
-                            server: %s" %(host["ip"], ipam_address_delete_response.json()["message"]), log_file)
-                        log_file.close()
-                        email_body.close()
-                        send_email()
+                        print_with_timestamp_and_log("Could not delete Host %s. Returned message from " \
+                            "server: %s" %(host["ip"], ipam_address_delete_response.json()["message"]),
+                            log_file)
+                        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
                         sys.exit(1)
                 elif source in host_sources_set: #update the host with the new sources set
                     host_sources_set.remove(source)
-                    #print("trying to update owner")
                     print(host["ip"])
                     print(host_sources_set)
                     new_payload_owner = ','.join(list(host_sources_set))
@@ -556,47 +547,43 @@ def delete_stale_hosts(source, time_tag, ipam_token, ipam_addresses_url, log_fil
                         PHPIPAM_PORT, PHPIPAM_APPID, host_id)
                     try:
                         ipam_address_update_response = requests.request("PATCH", ipam_address_update_url,
-                            data=json.dumps(new_payload), headers={'token': token, 'Content-Type': "application/json"})
+                            data=json.dumps(new_payload), headers={'token': token,
+                            'Content-Type': "application/json"})
                         ipam_address_update_response.raise_for_status()
                     except:
-                        print_with_timestamp_and_log("Error processing IPAM update API request. Please \
-                            verify settings and reachability.", log_file)
-                        log_file.close()
-                        email_body.close()
-                        send_email()
+                        print_with_timestamp_and_log("Error processing IPAM update API request. Please " \
+                            "verify settings and reachability.", log_file)
+                        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
                         sys.exit(1)
 
     else:
         # Could not get the addresses from the IPAM subnet
-        print_with_timestamp_and_log("Unable to get the subnet addresses from the IPAM. \
-            Please Retry later.", log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print_with_timestamp_and_log("Unable to get the subnet addresses from the IPAM. " \
+            "Please Retry later.", log_file)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
-def verify_ipam_subnet_usage(log_file):
+def verify_ipam_subnet_usage(log_file, email_body, EMAIL_CONTENT_FILE):
     """Returns the summary of the current usage of the IPAM subnet.
     """
     print("\nCurrent IPAM server subnet usage:")
     log_file.write("\nCurrent IPAM server subnet usage:\n")
-    ipam_subnet_response = ipam_get_url("subnets/%s/usage/" %(PHPIPAM_SUBNET_ID), log_file)
+    ipam_subnet_response = ipam_get_url("subnets/%s/usage/" %(PHPIPAM_SUBNET_ID), log_file,
+    EMAIL_CONTENT_FILE)
     if ipam_subnet_response["success"]:
         column_names = "{0:20}{1:20}{2:20}{3:20}{4:20}".format("Subnet ID","Used Hosts",
             "Free Hosts","Used Percent","Freehosts Percent")
         column_values = "{0:20}{1:20}{2:20}{3:20}{4:20}".format(str(PHPIPAM_SUBNET_ID),
             ipam_subnet_response["data"]["used"], ipam_subnet_response["data"]["freehosts"],
-            str(ipam_subnet_response["data"]["Used_percent"]),
-            str(ipam_subnet_response["data"]["freehosts_percent"]))
+            str(round(ipam_subnet_response["data"]["Used_percent"],3)),
+            str(round(ipam_subnet_response["data"]["freehosts_percent"],3)))
         print(column_names)
         print(column_values)
         log_file.write("%s\n%s" % (column_names, column_values))
     else:
-        print_with_timestamp_and_log("Unable to get the subnet usage info from the IPAM. \
-            Retry later.", log_file)
-        log_file.close()
-        email_body.close()
-        send_email()
+        print_with_timestamp_and_log("Unable to get the subnet usage info from the IPAM. " \
+            "Please retry later.", log_file)
+        cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
 def send_email():
@@ -614,11 +601,31 @@ def send_email():
         sl.quit()
         print("\nAn email listing the new & stale hosts was sent to the email recipient list.")
 
+def cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE):
+    """Prior to the program exit, close the open files, delete the temp email-body file,
+    and send the email if necessary.
+    """
+    email_body.write("\nBest Regards,\nCisco DIT Team\n")
+    #log_file.close()
+    email_body.close()
+    send_email()
+    os.remove(EMAIL_CONTENT_FILE)
+
+def notify_via_log_email_teams(msg, log_file, email_body, webex_teams_api):
+    """When a host is added or deleted, this function will be called
+    To send a notification via email and post in the Webex Teams space, and add the log to the logfile.
+    It returns a boolean flag which tells if an email will need to be sent or not.
+    """
+    print_with_timestamp_and_log(msg, log_file)
+    email_body.write("\n%s: %s\n" % (time.asctime(time.localtime(time.time())), msg))
+    email_flag = True
+    webex_teams_api.messages.create(roomId=TEAMS_ROOM_ID, text=msg)
+    return email_flag
+
 
 def main():
     """Main program
     """
-
     # User input flags definition:
     parser = argparse.ArgumentParser(description="Sync IPAM server from DNA Center, DHCP server \
         and/or static hosts in CSV file. If no arguments are passed, the default is to sync \
@@ -637,12 +644,6 @@ def main():
     time_tag = int(time.time())
     time_now = time.asctime(time.localtime(time.time()))
 
-    # Authenticate/refresh the token to IPAM:
-    ipam_token = ipam_get_auth_token()["token"]
-
-    # Create the API URI for IPAM addresses (hosts):
-    ipam_addresses_url = ipam_create_url("addresses")
-
     # Open a log file in local directory in append mode to write the log messages into,
     # and include the current day date (YYYY-MM-DD) in the filename:
     file_name = "logfile-phpipam_sync_%s.log" % datetime.now().strftime("%Y-%m-%d")
@@ -652,36 +653,51 @@ def main():
     # File open to write email log notifications if any:
     email_body = open(EMAIL_CONTENT_FILE, "w")
 
+    # Initiate the Webex Teams API session:
+    webex_teams_api = WebexTeamsAPI(access_token=TEAMS_BOT_TOKEN)
+
+    # Authenticate/refresh the token to IPAM:
+    ipam_token = ipam_get_auth_token()["token"]
+
+    # Create the API URI for IPAM addresses (hosts):
+    ipam_addresses_url = ipam_create_url("addresses")
+
     # If -c/--dnac input flag is set:
     if args.dnac:
         # Sync from DNAC to the IPAM DB:
-        sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file)
+        sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file, webex_teams_api)
         # Delete the stale dnac hosts from IPAM DB:
-        delete_stale_hosts(TAG_DNAC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
+        delete_stale_hosts(TAG_DNAC, time_tag, ipam_token, ipam_addresses_url, log_file,
+        email_body, EMAIL_CONTENT_FILE, webex_teams_api)
 
     # If -d/--dhcp input flag is set:
     if args.dhcp:
         # Sync from the DHCP server scopes leases to the IPAM DB:
-        sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file)
+        sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file, EMAIL_CONTENT_FILE,
+            webex_teams_api)
         # Delete the stale MS DHCP hosts from IPAM DB:
-        delete_stale_hosts(TAG_MSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
+        delete_stale_hosts(TAG_MSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
         # Sync from the IOS DHCP server:
-        sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file)
+        sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file, EMAIL_CONTENT_FILE,
+            webex_teams_api)
         # Delete the stale IOS DHCP hosts from IPAM DB:
-        delete_stale_hosts(TAG_IOSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
+        delete_stale_hosts(TAG_IOSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
 
     # If -s/--static input flag is set
     if args.static:
         # Sync the static hosts from the CSV file STATICS_CSV_FILE to the IPAM DB:
         sync_from_static_csv(STATICS_CSV_FILE, time_tag, ipam_token, ipam_addresses_url, log_file,
-            email_body)
+            email_body, EMAIL_CONTENT_FILE, webex_teams_api)
         # Delete the stale static hosts from IPAM DB:
-        delete_stale_hosts(TAG_STATIC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
+        delete_stale_hosts(TAG_STATIC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
 
     # If -v/--verify input flag is set:
     if args.verify:
         # Return the IPAM subnet usage:
-        verify_ipam_subnet_usage(log_file)
+        verify_ipam_subnet_usage(log_file, email_body, EMAIL_CONTENT_FILE)
 
     # If -l input flag is set:
     if args.l:
@@ -692,7 +708,8 @@ def main():
             sys.exit(1)
 
         # Search for the IP address in IPAM DB:
-        ipam_search_address_response = ipam_get_url("addresses/search/%s/" %(ip_address), log_file)
+        ipam_search_address_response = ipam_get_url("addresses/search/%s/" %(ip_address), log_file,
+        EMAIL_CONTENT_FILE)
         if ipam_search_address_response['success']:
             result = ipam_search_address_response["data"][0]
             print("\nIP address %s is present in IPAM Database:" % ip_address)
@@ -707,20 +724,26 @@ def main():
 
     # If no args are passed. Then sync from all the 3 sources and verify the IPAM subnet usage:
     if len(sys.argv) == 1:
-        sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file)
-        delete_stale_hosts(TAG_DNAC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
-        sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file)
-        delete_stale_hosts(TAG_MSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
-        sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file)
-        delete_stale_hosts(TAG_IOSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
-        sync_from_static_csv(STATICS_CSV_FILE, time_tag, ipam_token, ipam_addresses_url, log_file)
-        delete_stale_hosts(TAG_STATIC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body)
-        verify_ipam_subnet_usage(log_file)
+        sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file, webex_teams_api)
+        delete_stale_hosts(TAG_DNAC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
+        sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file, EMAIL_CONTENT_FILE,
+        webex_teams_api)
+        delete_stale_hosts(TAG_MSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
+        sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file, EMAIL_CONTENT_FILE,
+        webex_teams_api)
+        delete_stale_hosts(TAG_IOSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
+        sync_from_static_csv(STATICS_CSV_FILE, time_tag, ipam_token, ipam_addresses_url, log_file,
+        EMAIL_CONTENT_FILE, webex_teams_api)
+        delete_stale_hosts(TAG_STATIC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
+        verify_ipam_subnet_usage(log_file, email_body, EMAIL_CONTENT_FILE, EMAIL_CONTENT_FILE)
 
-    # close the open file, and send the email if email_flg is set:
-    log_file.close()
-    email_body.close()
-    send_email()
+    # close the open files, and send the email if email_flg is set:
+    cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
+
 
 if __name__ == "__main__":
     main()

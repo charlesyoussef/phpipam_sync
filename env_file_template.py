@@ -56,6 +56,11 @@ EMAIL_PROPERTIES = {
     "from_address": "", #String
     "to_address_list": "", #String
     "email_subject": "", #String
-    "email_content_tempfile": "email_content.log" #String 
+    "email_content_tempfile": "email_content.log" #String
     # email_content_tempfile is the base of the local-directory file where logs are saved
+}
+
+WEBEX_TEAMS = {
+    "room_id": "", #String #ID of the Webex Teams space where notifications will be posted
+    "bot_token": "" #String #Token of the Webex teams bot whose identity will be used to post messages
 }
