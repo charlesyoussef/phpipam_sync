@@ -537,18 +537,16 @@ EMAIL_CONTENT_FILE, webex_teams_api):
                         sys.exit(1)
                 elif source in host_sources_set: #update the host with the new sources set
                     host_sources_set.remove(source)
-                    print(host["ip"])
-                    print(host_sources_set)
+                    #print(host["ip"])
                     new_payload_owner = ','.join(list(host_sources_set))
                     new_payload = {"owner": new_payload_owner}
                     host_id = host["id"]
-                    print(new_payload_owner)
                     # Send the update API call:
                     ipam_address_update_url = "http://%s:%s/api/%s/addresses/%s/" % (PHPIPAM_HOST,
                         PHPIPAM_PORT, PHPIPAM_APPID, host_id)
                     try:
                         ipam_address_update_response = requests.request("PATCH", ipam_address_update_url,
-                            data=json.dumps(new_payload), headers={'token': token,
+                            data=json.dumps(new_payload), headers={'token': ipam_token,
                             'Content-Type': "application/json"})
                         ipam_address_update_response.raise_for_status()
                     except:
@@ -699,6 +697,7 @@ def main():
     if args.verify:
         # Return the IPAM subnet usage:
         verify_ipam_subnet_usage(log_file, email_body, EMAIL_CONTENT_FILE)
+        sys.exit(1)
 
     # If -l input flag is set:
     if args.l:
@@ -714,14 +713,18 @@ def main():
         if ipam_search_address_response['success']:
             result = ipam_search_address_response["data"][0]
             print("\nIP address %s is present in IPAM Database:" % ip_address)
-            column_names = "{0:20}{1:20}{2:20}{3:20}".format("IP address", "MAC address",
+            column_names = "{0:20}{1:20}{2:50}{3:50}".format("IP address", "MAC address",
                 "Hostname", "Description")
-            column_values = "{0:20}{1:20}{2:20}{3:20}\n".format(ip_address, result['mac'],
-                result['hostname'], result['description'])
+            host_mac = "N/A" if result['mac'] is None else result['mac']
+            host_hostname = "N/A" if result['hostname'] is None else result['hostname']
+            host_description = "N/A" if result['description'] is None else result['description']
+            column_values = "{0:20}{1:20}{2:50}{3:50}\n".format(ip_address, host_mac, host_hostname,
+                host_description)
             print(column_names)
             print(column_values)
         else:
-            print("\nIP address %s was not found in IPAM Database:" % ip_address)
+            print("\nIP address %s was not found in IPAM Database." % ip_address)
+        sys.exit(1)
 
     # If no args are passed. Then sync from all the 3 sources and verify the IPAM subnet usage:
     if len(sys.argv) == 1:
@@ -737,14 +740,16 @@ def main():
         delete_stale_hosts(TAG_IOSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
         EMAIL_CONTENT_FILE, webex_teams_api)
         sync_from_static_csv(STATICS_CSV_FILE, time_tag, ipam_token, ipam_addresses_url, log_file,
-        EMAIL_CONTENT_FILE, webex_teams_api)
+        email_body, EMAIL_CONTENT_FILE, webex_teams_api)
         delete_stale_hosts(TAG_STATIC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
         EMAIL_CONTENT_FILE, webex_teams_api)
-        verify_ipam_subnet_usage(log_file, email_body, EMAIL_CONTENT_FILE, EMAIL_CONTENT_FILE)
+        verify_ipam_subnet_usage(log_file, email_body, EMAIL_CONTENT_FILE)
 
     # close the open files, and send the email if email_flg is set:
     cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
 
+    # Print message that the script will rerun in 15 minutes:
+    print("\nThe script will rerun in 15 minutes...\n")
 
 if __name__ == "__main__":
     # Run the program now then repeatedly every 15 minutes
