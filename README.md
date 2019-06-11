@@ -24,6 +24,8 @@ Whenever an address (host) is added or deleted from the PHPIPAM Database, notifi
 The Role-based Access Control (RBAC) on the subnet management is natively built
 inside PHPIPAM which can be consumed from the server Web interface.
 
+The program includes a built-in scheduler to run the rerun the program every 15 minutes.
+This way you do not need to use a separate cron job to schedule it.
 ---
 
 ## Usage

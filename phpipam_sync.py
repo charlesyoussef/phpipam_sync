@@ -36,6 +36,7 @@ import pypsrp
 import paramiko
 import smtplib
 import os
+import schedule
 from email.mime.text import MIMEText
 from pypsrp.client import Client
 from requests.auth import HTTPBasicAuth
@@ -746,4 +747,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # Run the program now then repeatedly every 15 minutes
     main()
+    schedule.every(15).minutes.do(main)
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
