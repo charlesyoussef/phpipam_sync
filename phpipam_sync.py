@@ -749,7 +749,7 @@ def main():
     cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
 
     # Print message that the script will rerun in 15 minutes:
-    print("\nThe script will rerun in 15 minutes...\n")
+    print("\n%s: The script will rerun in 15 minutes...\n" % (time.asctime(time.localtime(time.time()))))
 
 if __name__ == "__main__":
     # Run the program now then repeatedly every 15 minutes
