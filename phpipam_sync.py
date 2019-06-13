@@ -48,7 +48,8 @@ from datetime import datetime
 try:
     import env_file
 except (SyntaxError, ModuleNotFoundError):
-    print("Invalid input in env_file. Please complete the required fields in the proper format.")
+    print("env_file.py file not found. Please clone it from the env_file_template and " \
+        "complete the required fields in the proper format.")
     sys.exit(1)
 
 __author__ = "Charles Youssef"
@@ -106,13 +107,17 @@ TAG_IOSDHCP = "IOSDHCP"
 TAG_STATIC = "STATIC"
 
 # Flag for whether an email needs to be sent or not:
-email_flag = False #
+email_flag = False
 # Global file open to add logs for email notification when required:
 email_body = open(EMAIL_CONTENT_FILE, "w")
 
 # Log file name, where program output is also appended in local directory.
 # It is updated in main() function.
 LOG_FILE = None
+
+# Scheduler time, defining how frequently the main program is rerun.
+# This can be updated by the user input too. Default is defined here as 15 minutes:
+script_rerun_timer = 15
 
 # DNAC Helper Functions:
 
@@ -309,8 +314,8 @@ def process_host_in_ipam(ip_add, token, url, payload, log_file, email_body, EMAI
                 data=json.dumps(payload), headers={'token': token, 'Content-Type': "application/json"})
             ipam_address_update_response.raise_for_status()
         except:
-            print_with_timestamp_and_log("Error processing IPAM API request. \
-            Please verify settings and reachability.", log_file)
+            print_with_timestamp_and_log("Error processing IPAM API request. " \
+            "Please verify settings and reachability.", log_file)
             cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
             sys.exit(1)
 
@@ -385,8 +390,8 @@ def sync_from_static_csv(csv_file, time_tag, ipam_token, ipam_addresses_url, log
                     % host[0], log_file)
 
     except EnvironmentError:
-        print_with_timestamp_and_log("Unable to open the CSV file. Please verify the file \
-        variable in the environment file and retry.", log_file)
+        print_with_timestamp_and_log("Unable to open the CSV file. Please verify the file " \
+        "variable in the environment file and retry.", log_file)
         cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
@@ -471,9 +476,9 @@ def sync_from_ios_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file
         ssh_client.connect(IOS_DHCP_SWITCH, port=IOS_DHCP_PORT, username=IOS_DHCP_USERNAME,
             password=IOS_DHCP_PASSWORD, look_for_keys=False, allow_agent=False)
     except (socket.error, paramiko.ssh_exception.AuthenticationException,
-        paramiko.ssh_exception.NoValidConnectionsError, paramiko.ssh_exception.SSHException):
-        print_with_timestamp_and_log("Unable to connect to IOS DHCP Server %s. Please verify \
-        settings and reachability." % IOS_DHCP_SWITCH, log_file)
+        paramiko.ssh_exception.NoValidConnectionsError, paramiko.ssh_exception.SSHException) as error:
+        print_with_timestamp_and_log("Unable to connect to IOS DHCP Server %s. Please verify " \
+        "settings and reachability. %s" % (IOS_DHCP_SWITCH, error), log_file)
         cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
         sys.exit(1)
 
@@ -598,7 +603,7 @@ def send_email():
         sl = smtplib.SMTP(EMAIL_SERVER)
         sl.send_message(msg)
         sl.quit()
-        print("\nAn email listing the new & stale hosts was sent to the email recipient list.")
+        #print("\nAn email listing the new & stale hosts was sent to the email recipient list.")
 
 def cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE):
     """Prior to the program exit, close the open files, delete the temp email-body file,
@@ -634,6 +639,8 @@ def main():
     parser.add_argument("-s", "--static", action="store_true", help="sync IPAM from static CSV file")
     parser.add_argument("-v", "--verify", action="store_true", help="verify the current IPAM subnet usage")
     parser.add_argument("-l", metavar='IP-Address', type=str, help="search for an IP address inside IPAM")
+    parser.add_argument("-t", metavar='rerun-timer', type=int,
+        help="define the script auto-rerun timer in minutes")
     args = parser.parse_args()
 
     requests.packages.urllib3.disable_warnings()
@@ -726,10 +733,27 @@ def main():
             print("\nIP address %s was not found in IPAM Database." % ip_address)
         sys.exit(1)
 
-    # If no args are passed. Then sync from all the 3 sources and verify the IPAM subnet usage:
-    if len(sys.argv) == 1:
+    # If -t input flag is set:
+    if args.t:
+        # check if the argument entered is a valid integ
+        timer_input = args.t
+
+        # if input timer is less than 5 minutes, set the rerun_timer to 5 minutes and notify user:
+        if timer_input < 5:
+            print("Input timer is too agressive. Setting to the minimum recommended of 5 minutes.")
+            timer_input = 5
+
+        script_rerun_timer = timer_input
+
+    # If no args are passed, or only the -t argument is passed:
+    # Then sync from all the 3 sources and verify the IPAM subnet usage:
+    if (len(sys.argv) == 1 or (args.t and len(sys.argv) == 3)):
         sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file, webex_teams_api)
         delete_stale_hosts(TAG_DNAC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
+        EMAIL_CONTENT_FILE, webex_teams_api)
+        sync_from_static_csv(STATICS_CSV_FILE, time_tag, ipam_token, ipam_addresses_url, log_file,
+        email_body, EMAIL_CONTENT_FILE, webex_teams_api)
+        delete_stale_hosts(TAG_STATIC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
         EMAIL_CONTENT_FILE, webex_teams_api)
         sync_from_ms_dhcp_server(time_tag, ipam_token, ipam_addresses_url, log_file, EMAIL_CONTENT_FILE,
         webex_teams_api)
@@ -739,22 +763,19 @@ def main():
         webex_teams_api)
         delete_stale_hosts(TAG_IOSDHCP, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
         EMAIL_CONTENT_FILE, webex_teams_api)
-        sync_from_static_csv(STATICS_CSV_FILE, time_tag, ipam_token, ipam_addresses_url, log_file,
-        email_body, EMAIL_CONTENT_FILE, webex_teams_api)
-        delete_stale_hosts(TAG_STATIC, time_tag, ipam_token, ipam_addresses_url, log_file, email_body,
-        EMAIL_CONTENT_FILE, webex_teams_api)
         verify_ipam_subnet_usage(log_file, email_body, EMAIL_CONTENT_FILE)
 
     # close the open files, and send the email if email_flg is set:
     cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
 
     # Print message that the script will rerun in 15 minutes:
-    print("\n%s: The script will rerun in 15 minutes...\n" % (time.asctime(time.localtime(time.time()))))
+    print("\n%s: The script will rerun in %s minutes...\n" % (time.asctime(time.localtime(time.time())),
+        script_rerun_timer))
 
 if __name__ == "__main__":
-    # Run the program now then repeatedly every 15 minutes
+    # Run the program now then repeatedly every "script_rerun_timer" minutes
     main()
-    schedule.every(15).minutes.do(main)
+    schedule.every(script_rerun_timer).minutes.do(main)
     while True:
         schedule.run_pending()
         time.sleep(1)
