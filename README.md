@@ -37,7 +37,7 @@ This way you do not need to use a separate cron job to schedule it.
 - Parameters can be specified to chose the sync sources and/or to just return the subnet usage.
 
 (phpipam-venv) cyoussef:$python phpipam_sync.py -h
-usage: phpipam_sync.py [-h] [-c] [-d] [-s] [-v] [-l IP-Address]
+usage: phpipam_sync.py [-h] [-c] [-d] [-s] [-v] [-l IP-Address] [-t rerun-timer]
 
 Sync IPAM server from DNA Center, DHCP server and/or static hosts in CSV file.
 If no arguments are passed, the default is to sync from all 3 sources.
@@ -56,6 +56,7 @@ optional arguments:
 
   -l IP-Address  search for an IP address inside IPAM
 
+  -t rerun-timer  define the script auto-rerun timer in minutes
 (phpipam-venv) cyoussef:$
 
 ---
