@@ -56,7 +56,8 @@ optional arguments:
 
   -l IP-Address  search for an IP address inside IPAM
 
-  -t rerun-timer  define the script auto-rerun timer in minutes
+  -t rerun-timer  define the script auto-rerun timer in minutes. Default is 15 minutes.
+  
 (phpipam-venv) cyoussef:$
 
 ---
