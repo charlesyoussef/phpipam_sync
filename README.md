@@ -36,7 +36,9 @@ This way you do not need to use a separate cron job to schedule it.
 - If no parameters are specified: the sync will be made from all the sources, and a verification of the resulting IPAM subnet usage is returned.
 - Parameters can be specified to chose the sync sources and/or to just return the subnet usage.
 
+```
 (phpipam-venv) cyoussef:$python phpipam_sync.py -h
+```
 usage: phpipam_sync.py [-h] [-c] [-d] [-s] [-v] [-l IP-Address] [-t rerun-timer]
 
 Sync IPAM server from DNA Center, DHCP server and/or static hosts in CSV file.
@@ -68,7 +70,7 @@ It is recommended to install the Python dependencies in a new virtual environmen
 http://docs.python-guide.org/en/latest/dev/virtualenvs/
 
 Python package prerequisites in "requirements.txt" file which is located in the root directory of this distribution. To install them:
-$ pip install -r requirements.txt
+`$ pip install -r requirements.txt`
 
 
 ## Authors & Maintainers
