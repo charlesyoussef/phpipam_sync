@@ -1,7 +1,26 @@
-## PHPIPAM Sync:
+phpIPAM-Sync Program:
 
-This is a program to synchronize a PHPIPAM server with addresses (hosts)
-from multiple sources being:
+## Business Challenge:
+
+Many IT Teams are facing challenges tracking and managing the IP subnet usage on their networks, with lack of centralized visibility of workloads currently present on the network.
+
+This is contributed to by many factors mainly:
+- The growth in the number of endpoints on the network, from users to servers and things (IoT).
+- Diversity of technology, especially with the additions of SDN and network controllers like SDA.
+- Use of manual processes of managed IP addresses, frequently via some form of Excel or Smartsheet.
+
+## Solution presented in this program:
+
+phpIPAM-Sync is a program that tackles the business challenge described above, with the following benefits:
+
+- Free: It feeds IP information into a free open-source IPAM (IP Address Management) solution called
+phpIPAM, from multiple sources as described next.
+- Ease-of-use: The requirements are very simple to setup and users can very easily get the program running.
+- Extensible: Modular program which can easily be extended to add additional sources/functionality.
+
+## Description:
+
+This is a program to synchronize a PHPIPAM server with addresses (hosts) from multiple sources being:
 - Cisco DNA Center
 - Microsoft DHCP Server
 - Cisco DHCP Server running on Cisco IOS switch
@@ -26,7 +45,6 @@ inside PHPIPAM which can be consumed from the server Web interface.
 
 The program includes a built-in scheduler to run the rerun the program every 15 minutes.
 This way you do not need to use a separate cron job to schedule it.
----
 
 ## Usage
 
@@ -56,11 +74,10 @@ optional arguments:
 
   -l IP-Address  search for an IP address inside IPAM
 
-  -t rerun-timer  define the script auto-rerun timer in minutes. Default is 15 minutes.
-  
+  -t rerun-timer  define the script auto-rerun timer in minutes
+
 (phpipam-venv) cyoussef:$
 
----
 
 ## Installation & prerequisites
 
