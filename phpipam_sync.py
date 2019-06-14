@@ -37,6 +37,8 @@ import paramiko
 import smtplib
 import os
 import schedule
+import termios
+import contextlib
 from email.mime.text import MIMEText
 from pypsrp.client import Client
 from requests.auth import HTTPBasicAuth
@@ -626,6 +628,17 @@ def notify_via_log_email_teams(msg, log_file, email_body, webex_teams_api):
     webex_teams_api.messages.create(roomId=TEAMS_ROOM_ID, text=msg)
     return email_flag
 
+# This is the keyboard input handler
+@contextlib.contextmanager
+def raw_mode(file):
+    old_attrs = termios.tcgetattr(file.fileno())
+    new_attrs = old_attrs[:]
+    new_attrs[3] = new_attrs[3] & ~(termios.ECHO | termios.ICANON)
+    try:
+        termios.tcsetattr(file.fileno(), termios.TCSADRAIN, new_attrs)
+        yield
+    finally:
+        termios.tcsetattr(file.fileno(), termios.TCSADRAIN, old_attrs)
 
 def main():
     """Main program
@@ -640,7 +653,7 @@ def main():
     parser.add_argument("-v", "--verify", action="store_true", help="verify the current IPAM subnet usage")
     parser.add_argument("-l", metavar='IP-Address', type=str, help="search for an IP address inside IPAM")
     parser.add_argument("-t", metavar='rerun-timer', type=int,
-        help="define the script auto-rerun timer in minutes")
+        help="define the script auto-rerun timer in minutes. Default is 15 minutes.")
     args = parser.parse_args()
 
     requests.packages.urllib3.disable_warnings()
@@ -667,6 +680,9 @@ def main():
 
     # Create the API URI for IPAM addresses (hosts):
     ipam_addresses_url = ipam_create_url("addresses")
+
+    # default rerun timer:
+    script_rerun_timer = 15
 
     # If -c/--dnac input flag is set:
     if args.dnac:
@@ -740,7 +756,7 @@ def main():
 
         # if input timer is less than 5 minutes, set the rerun_timer to 5 minutes and notify user:
         if timer_input < 5:
-            print("Input timer is too agressive. Setting to the minimum recommended of 5 minutes.")
+            print("The input timer is too agressive. Setting to the minimum recommended of 5 minutes.")
             timer_input = 5
 
         script_rerun_timer = timer_input
@@ -769,13 +785,20 @@ def main():
     cleanup_before_exit(log_file, email_body, EMAIL_CONTENT_FILE)
 
     # Print message that the script will rerun in 15 minutes:
-    print("\n%s: The script will rerun in %s minutes...\n" % (time.asctime(time.localtime(time.time())),
-        script_rerun_timer))
+    print("\n%s: The script will rerun in %s minutes. To exit press Ctrl-C...\n" % (
+        time.asctime(time.localtime(time.time())), script_rerun_timer))
 
 if __name__ == "__main__":
     # Run the program now then repeatedly every "script_rerun_timer" minutes
     main()
-    schedule.every(script_rerun_timer).minutes.do(main)
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    with raw_mode(sys.stdin):
+        try:
+            schedule.every(script_rerun_timer).minutes.do(main)
+            while True:
+                schedule.run_pending()
+                time.sleep(1)
+                ch = sys.stdin.read(1)
+                if not ch or ch == chr(4):
+                    break
+        except (KeyboardInterrupt, EOFError):
+            pass
