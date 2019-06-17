@@ -43,8 +43,9 @@ Whenever an address (host) is added or deleted from the PHPIPAM Database, notifi
 The Role-based Access Control (RBAC) on the subnet management is natively built
 inside PHPIPAM which can be consumed from the server Web interface.
 
-The program includes a built-in scheduler to run the rerun the program every 15 minutes.
-This way you do not need to use a separate cron job to schedule it.
+The program includes a built-in scheduler to run the rerun the program every X minutes, 
+where X is 15 by default but can be set via a user input (in which case the minimum allowed value is 5).
+This is to simplify the use and avoid the requirement of having a separate cron job to schedule the program.
 
 ## Usage
 
@@ -74,7 +75,7 @@ optional arguments:
 
   -l IP-Address  search for an IP address inside IPAM
 
-  -t rerun-timer  define the script auto-rerun timer in minutes
+  -t rerun-timer  define the script auto-rerun timer in minutes. Default is 15; Minimum allowed is 5 
 
 (phpipam-venv) cyoussef:$
 
