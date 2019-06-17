@@ -347,8 +347,7 @@ def sync_from_dnac(time_tag, ipam_token, ipam_addresses_url, log_file, webex_tea
             "subnetId": str(PHPIPAM_SUBNET_ID),
             "ip": host["hostIp"],
             "is_gateway": "0",
-            "description": "Connected to %s port %s" % (
-                host["connectedNetworkDeviceName"], host["connectedInterfaceName"]),
+            "description": "Connected to %s" % host["connectedNetworkDeviceName"],
             "hostname": host["id"],
             "mac": host["hostMac"],
             "owner": TAG_DNAC,
@@ -756,7 +755,8 @@ def main():
 
         # if input timer is less than 5 minutes, set the rerun_timer to 5 minutes and notify user:
         if timer_input < 5:
-            print("The input timer is too agressive. Setting to the minimum recommended of 5 minutes.")
+            print("\nThe input timer %s is too agressive. Setting to the minimum " \
+                "recommended of 5 minutes." % args.t)
             timer_input = 5
 
         script_rerun_timer = timer_input
@@ -791,14 +791,10 @@ def main():
 if __name__ == "__main__":
     # Run the program now then repeatedly every "script_rerun_timer" minutes
     main()
-    with raw_mode(sys.stdin):
+    schedule.every(script_rerun_timer).minutes.do(main)
+    while True:
         try:
-            schedule.every(script_rerun_timer).minutes.do(main)
-            while True:
-                schedule.run_pending()
-                time.sleep(1)
-                ch = sys.stdin.read(1)
-                if not ch or ch == chr(4):
-                    break
+            schedule.run_pending()
+            time.sleep(1)
         except (KeyboardInterrupt, EOFError):
-            pass
+            sys.exit(1)
