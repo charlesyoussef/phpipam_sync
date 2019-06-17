@@ -1,4 +1,4 @@
-phpIPAM-Sync Program:
+#### phpIPAM-Sync Program:
 
 ## Business Challenge:
 
@@ -6,8 +6,8 @@ Many IT Teams are facing challenges tracking and managing the IP subnet usage on
 
 This is contributed to by many factors mainly:
 - The growth in the number of endpoints on the network, from users to servers and things (IoT).
-- Diversity of technology, especially with the additions of SDN and network controllers like SDA.
-- Use of manual processes of managed IP addresses, frequently via some form of Excel or Smartsheet.
+- Diversity of technology, especially with the additions of SDN and network controllers like Cisco SDA.
+- Use of manual processes of managed IP addresses, commonly via some form of Excel or Smartsheet.
 
 ## Solution presented in this program:
 
