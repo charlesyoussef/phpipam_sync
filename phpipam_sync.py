@@ -652,7 +652,7 @@ def main():
     parser.add_argument("-v", "--verify", action="store_true", help="verify the current IPAM subnet usage")
     parser.add_argument("-l", metavar='IP-Address', type=str, help="search for an IP address inside IPAM")
     parser.add_argument("-t", metavar='rerun-timer', type=int,
-        help="define the script auto-rerun timer in minutes. Default is 15 minutes.")
+        help="define the script auto-rerun timer in minutes. Default is 15; Minimum allowed is 5")
     args = parser.parse_args()
 
     requests.packages.urllib3.disable_warnings()
